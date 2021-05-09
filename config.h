@@ -1,0 +1,4 @@
+#define SHELL_PORT 31337
+#define SHELL_HOST "172.26.188.252"
+#define SHELL_BINARY "/bin/sh"
+#define USE_OLD_ENTRYPOINT 0
